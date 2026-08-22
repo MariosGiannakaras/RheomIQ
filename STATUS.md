@@ -1,171 +1,90 @@
 # MyFinHub status
 
-## v1.2.0 release-preparation snapshot
+## v1.2.1 patch release
 
 MyFinHub is a private, single-owner personal finance application. Production deploys from `main` to Vercel and uses Supabase/PostgreSQL as the durable finance store. Compatibility-critical historical identifiers such as `RheomIQ`, `rheomiq_*` and `RHEOMIQ_*` remain intentionally unchanged where they are persistence/protocol contracts.
 
-This snapshot records the release batch tracked by issue #199.
+This patch release is tracked by issue #206 and fixes the Windows desktop startup defect discovered during normal v1.2.0 use.
 
-- production baseline entering this release: **v1.1.0**
-- production baseline commit: `main@3614988377f77c0370370117bc072873949b13ab`
-- integrated development baseline before release metadata: `develop@8b4e242ea067aef623ed1a45dc23e79cc12edab4`
-- `develop` at release-prep start: **3 commits ahead / 0 behind** `main`
-- release scope: PRs #194, #197 and #195
-- release target: **v1.2.0**
-- release tracker: issue #199
+- production baseline entering the patch: **v1.2.0**
+- production baseline commit: `main@5f9accec7d04825c2ce78ada1d173088d76534d1`
+- validated implementation PR: **#215**
+- integration commit: `develop@1029e7fe0ac45448ecf73a5f47913ab5bc8995e1`
+- release target: **v1.2.1**
+- release tracker: **#206**
 
-Final release-prep, production `main`, deployment, tag and Windows release evidence are recorded in #199 and the corresponding release PRs as those gates complete.
+## Confirmed Windows root cause
 
-## v1.2.0 capability batch
+The v1.2.0 installed Electron host could remain alive while its bundled Node backend exited before readiness. The packaged `server.mjs` was an esbuild ESM bundle containing CommonJS Express dependencies; `debug` attempted `require('tty')`, but the ESM bundle did not provide a real Node `require`, causing:
 
-### Home navigation and category management
+`BACKEND_EXITED_DURING_STARTUP → Dynamic require of "tty" is not supported`
 
-PR #194 added:
+The old Windows smoke checked the Electron process rather than the hidden backend process, so this backend failure could be reported as a successful package launch.
 
-- semantic MyFinHub brand/home buttons on desktop and mobile that route to Dashboard;
-- normalized category/subcategory comparison across whitespace, case and Greek diacritics;
-- deterministic merging of normalized duplicate categories/subcategories while preserving the first visible spelling;
-- safer non-overlapping vehicle subcategory defaults;
-- explicit expense/income category Save actions with dirty/saved state and accessible feedback;
-- invalid/empty category trees are rejected without overwriting the last persisted configuration;
-- no historical transaction category migration or accounting rewrite.
+## v1.2.1 corrections
 
-Exact validated feature head: `c3fa44c880d259fe95390ba8f2572e53d3c6df5d`.
+PR #215 makes the Windows startup boundary diagnosable, recoverable and directly testable:
 
-Feature validation:
+- the desktop ESM backend bundle now provides `createRequire(import.meta.url)` so CommonJS dependencies can resolve Node built-ins under the bundled Node.js 22 runtime;
+- backend startup stdout/stderr is captured in bounded, in-memory diagnostics rather than discarded;
+- startup failures use stable stage/code classifications for configuration, Supabase preflight, secure storage/DPAPI, runtime/bundle, backend spawn/exit/timeout and window load;
+- the first-run setup performs an HTTPS Supabase URL/publishable-key preflight before persisting configuration;
+- failed startup returns to the setup window for correction/retry rather than forcing a quit/reinstall loop;
+- setup progress is driven by real Electron-main startup stages;
+- users can copy structured diagnostics whose credentials/tokens/card-vault key material are redacted;
+- post-readiness runtime detail is intentionally excluded from copyable failure diagnostics;
+- the dedicated **Windows First Run** workflow installs the real NSIS package, consumes persisted first-run configuration, exercises Electron `safeStorage` / Windows DPAPI and requires a live packaged `node.exe → server.mjs --serve-dist` backend;
+- the general **Windows Desktop** workflow now requires the same live bundled backend for unpacked and installed launches, preventing an Electron-only false positive.
 
-- CI #791: success, including **52 test files / 252 tests**, app/API checks, production build and bundle budgets;
-- Primary-Chromium rendered QA: success;
-- CodeQL #745: success;
-- Cross-engine/WebKit #84: success;
-- Performance #78: success;
-- Windows Desktop #443: success;
-- unresolved review threads before merge: zero.
+## Exact implementation validation
 
-### Native Android bearer API contract
+Final PR #215 head: `a84120333e326648fff6d48775eecdafed9ba748`.
 
-PR #197 added a narrow native-client authentication mode to the existing MyFinHub finance API. Android application code remains in the separate `MariosGiannakaras/MyFinHub-Android-App` repository.
+- CI #839: success — root/API checks, tests, TypeScript/Vite build, bundle budgets and Primary-Chromium rendered QA;
+- CodeQL #793: success;
+- Cross-engine/WebKit #126: success;
+- Performance #120: success;
+- Windows First Run #10: success — real install, persisted config, DPAPI-protected secret storage, live packaged backend and uninstall;
+- Windows Desktop #489: success — unpacked/installed live-backend assertions, package/install/launch/uninstall/checksum/evidence;
+- unresolved PR review threads before merge: zero.
 
-Native bearer support is disabled by default and explicitly enabled only on approved finance/card-secret routes. Browser auth/session/MFA/login/logout remain cookie-oriented.
+## Security and finance invariants
 
-Security invariants:
+The patch does not change finance data, accounting rules, authentication authorization or database schema.
 
-- browser/Windows HttpOnly/Secure cookie sessions remain unchanged;
-- cookie mutations still require same-origin/CSRF validation;
-- an explicit bearer credential is authoritative and fails closed without ambient-cookie fallback;
-- bearer mutations may omit browser Origin metadata only after bearer authentication succeeds;
-- no permissive CORS policy is introduced;
-- configured owner UID and `aal2` remain mandatory;
-- database access remains publishable-key + user JWT under existing RLS/RPC;
-- optimistic revision conflicts, validation, backups and audit behavior remain intact;
-- bearer failures do not clear unrelated browser cookies;
-- no service-role/secret credential is required or allowed in the Android client;
-- PAN/expiry remain in the existing owner+AAL2 encrypted card vault and CVV remains device-local only.
+- browser/Windows HttpOnly-cookie sessions and same-origin mutation checks remain intact;
+- configured owner UID and mandatory TOTP/AAL2 remain required;
+- Supabase RLS/RPC and optimistic revision checks remain authoritative;
+- approved native Android bearer routes remain explicitly scoped and fail closed;
+- no service-role/secret credential is introduced into normal web/desktop/native runtime code;
+- PAN/expiry remain in the existing owner+AAL2 encrypted server vault;
+- CVV remains encrypted device-local only and is rejected by server persistence;
+- receipt images/OCR remain device-local under the existing local-only OCR contract;
+- no database migration, destructive historical-data rewrite or accounting-model change is part of v1.2.1.
 
-Exact validated feature head: `e0d4ee10ec42688008a4d8436c0df8e42f7a94f2`.
+## Windows desktop contract
 
-Feature validation:
+Electron owns the Windows application and starts the existing Express backend as a hidden child process using the bundled Node.js 22 runtime. The backend binds only to `127.0.0.1` on an OS-selected ephemeral port and serves the packaged Vite frontend from the same local origin.
 
-- CI #801: success;
-- CodeQL #755: success;
-- Cross-engine/WebKit #93: success;
-- Performance #87: success;
-- Windows Desktop #453: success;
-- final exact-diff security review: success;
-- unresolved review threads before merge: zero.
+Renderer Node access remains disabled; context isolation, sandboxing, navigation restrictions and desktop security headers remain enabled. Desktop uses the same Supabase project, owner login, mandatory TOTP AAL2, RLS/RPC and optimistic revision rules as the web application.
 
-The durable consumer contract is documented in `docs/ANDROID_NATIVE_API.md`.
+Desktop releases use `myfinhub-v<semver>` tags already present on `main`. The release workflow builds the installer, verifies package/runtime behavior, creates SHA-256 metadata and publishes the controlled GitHub Release. Personal-use builds may be unsigned and can trigger SmartScreen / Unknown publisher warnings.
 
-### Device-local receipt capture and OCR
+## v1.2.1 release gates
 
-PR #195 added a capture-first receipt workflow attached only to generic Quick Entry.
+The implementation validation above is supporting evidence. The release-prep tree must independently pass the current applicable exact-head gates after the `1.2.1` version/documentation metadata is applied:
 
-Lifecycle:
-
-**camera/file JPG/PNG → normalized device-local IndexedDB draft → optional local OCR → deterministic proposal → existing Quick Entry → explicit normal submit → local draft deletion**.
-
-Privacy and behavior invariants:
-
-- pending receipt images remain device-local and survive normal reload/app close/logout until handled;
-- Tesseract.js 7 uses pinned Greek `ell` + English `eng` packages and self-hosted worker/WASM/language assets;
-- no Azure, Google, AWS, external LLM/VLM or other receipt-processing provider;
-- OCR is lazy-loaded, bounded, cancellable/retriable and raw OCR text is transient;
-- receipt images/raw OCR never enter FinanceData, Supabase, normal backups, Change History or application logs;
-- no permanent receipt archive or cloud receipt sync;
-- deterministic parsing proposes merchant/date/total/currency and may conservatively reuse an existing category;
-- account/card selection remains manual;
-- non-EUR detection warns and prevents silent EUR amount prefill;
-- normal Quick Entry submit remains the only transaction-creation action;
-- cancellation leaves the receipt pending and a draft is deleted only after successful normal submit;
-- no database/schema migration or accounting rewrite.
-
-Exact validated feature head: `88fce8217b9cb87179055bd6b25d953b02d2b3d8`.
-
-Feature validation:
-
-- exact-head CI: success with **56 test files / 267 tests**, app/API checks, TypeScript/Vite build and bundle budgets;
-- dedicated Primary-Chromium receipt lifecycle QA: success;
-- OCR recognition observed **zero external HTTP requests**;
-- CodeQL: success;
-- Cross-engine/WebKit: success;
-- Performance: success;
-- Windows Desktop: success;
-- unresolved review threads before merge: zero.
-
-Hands-on testing with representative real receipts is intentionally outside GitHub engineering tracking and is not a release gate. Issue #198 is closed as `not planned` to record that policy.
-
-## Finance, persistence and secret invariants
-
-The compatibility `FinanceData` document remains the canonical read/import representation. Normal writes update mutable state through optimistic revision locking.
-
-This release does not introduce a database migration, destructive production-data rewrite or alternate finance engine. Existing accounting behavior remains authoritative:
-
-- internal transfers, withdrawals, savings transfers, card payments and reconciliation adjustments do not become ordinary spending;
-- `saving_cash_offset` remains payroll/current → savings with no physical-cash ledger leg;
-- split portions balance to the parent and are counted once;
-- scheduled items do not affect current balances until explicit completion;
-- credit purchases are spending while credit liability repayment is not counted as spending again;
-- lending remains a receivable and repayment reduces that receivable;
-- Smart Review remains advisory until explicit user confirmation.
-
-Payment-card metadata may live in `FinanceData.state.cards`; full PAN, expiry and CVV do not. PAN/expiry use the ciphertext-only server card vault. CVV uses the encrypted device-local vault and is rejected by server persistence boundaries.
-
-## Windows desktop and release contract
-
-- Electron owns the Windows application and starts the existing Express backend as a hidden child process using the bundled Node.js 22 runtime.
-- The backend binds only to `127.0.0.1` on an OS-selected ephemeral port and serves the packaged Vite frontend from the same local origin.
-- Renderer Node access remains disabled; context isolation, sandboxing, navigation restrictions and desktop security headers remain enabled.
-- Desktop uses the same Supabase project, owner login, mandatory TOTP AAL2, RLS/RPC and optimistic revision rules.
-- Desktop releases use `myfinhub-v<semver>` tags already present on `main`.
-- The Windows release workflow builds/smoke-tests the packaged executable and NSIS installer, verifies exact tag/version/main ancestry, generates SHA-256 metadata and publishes the controlled GitHub Release.
-- Unsigned personal-use releases may trigger SmartScreen/Unknown publisher warnings; release integrity still depends on the controlled GitHub source and checksum verification.
-
-## Repository cleanup policy
-
-The v1.2.0 release finalization also closes stale bookkeeping without rewriting Git history:
-
-- issue #188 no longer presents #198 as an active manual-test backlog;
-- #198 remains closed `not planned` because personal hands-on OCR testing is outside GitHub tracking;
-- merged PR #197 records its actually completed Windows and final security-review gates;
-- `docs/ANDROID_NATIVE_API.md` records the contract as merged rather than as an implementation branch;
-- historical commit messages are not rewritten solely to remove old issue references.
-
-NPM lockfiles remain dependency snapshots rather than release-note authorities. Manifest versions define the application/desktop release version; dependency lockfiles are not regenerated solely for a version-only release metadata bump because doing so would create unrelated dependency churn. Their install compatibility is revalidated by exact-head CI and Windows package gates.
-
-## Final release gates
-
-Feature-branch validation above is supporting evidence only. The integrated v1.2.0 release-prep head must independently pass the repository's current applicable gates before merge:
-
-- root/API installs, audits, security guard, full unit/source suite, TypeScript/Vite build, bundle budgets and API checks;
+- root/API installs, audits, security guard, full test suite, TypeScript/Vite build, bundle budgets and API checks;
 - Primary-Chromium rendered frontend QA;
 - CodeQL;
 - Cross-engine/WebKit;
-- Performance/loading-shift smoke;
-- Windows Desktop package/install/launch/uninstall/checksum validation;
-- zero unresolved review threads on the unchanged exact head.
+- Performance/loading-shift smoke where configured;
+- Windows Desktop package/install/launch/uninstall/checksum with live-backend assertions;
+- Windows First Run persisted-config/DPAPI/live-backend gate;
+- zero unresolved review threads on the unchanged release-prep head.
 
-After release-prep is squash-merged into `develop`, a separate controlled `develop → main` release PR is validated and squash-merged. Production deployment provenance/API/security behavior must resolve to the resulting exact `main` commit before the `myfinhub-v1.2.0` Windows publication tag is considered complete.
+After release-prep is squash-merged into `develop`, a separate controlled `develop → main` PR is validated. Production deployment provenance and live API/security behavior must resolve to the exact resulting `main` commit before `myfinhub-v1.2.1` and its Windows installer/checksum are considered complete.
 
 ## Delivery workflow
 
-Implementation work follows Issue → short-lived branch → PR → required checks → squash merge into `develop`. Production release is a separate deliberate `develop -> main` PR followed by production verification. After a release, `develop` may be synchronized to the exact released `main` commit only after verifying that doing so loses no tree content.
+Implementation work follows **Issue → short-lived branch → PR → required checks → squash merge into `develop`**. Production release is a separate deliberate `develop → main` PR followed by production verification. After release, `develop` is synchronized to the exact released `main` baseline only after verifying that no tree content is lost.

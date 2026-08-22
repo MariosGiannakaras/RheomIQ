@@ -4,6 +4,35 @@ All notable MyFinHub changes are recorded here. Release artifacts remain availab
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-08-22
+
+### Fixed
+
+- Fixed the installed Windows desktop backend crash that could occur immediately after valid first-run configuration. The esbuild ESM `server.mjs` bundle now provides a Node `createRequire(import.meta.url)` bridge so Express/CommonJS dependencies can resolve Node built-ins such as `tty` under the bundled Node.js 22 runtime.
+- Replaced the generic local-service startup failure with structured stage/error codes and bounded startup diagnostics, preserving the actual backend cause instead of discarding `stderr`.
+- Failed desktop startup now returns to the first-run/setup window for correction and retry rather than forcing an opaque quit/reinstall loop.
+- Added a real HTTPS Supabase URL/publishable-key preflight before first-run configuration is persisted.
+- Hardened Windows CI so a live Electron process is no longer sufficient: both unpacked and installed package smoke require the bundled `node.exe → server.mjs --serve-dist` backend to be running.
+
+### Security & privacy
+
+- Copyable startup diagnostics redact Supabase keys, bearer/JWT values and card-vault key material and remain bounded/in-memory; post-readiness runtime detail is intentionally omitted from copyable failure diagnostics.
+- Electron renderer sandboxing, context isolation, loopback-only backend binding, HttpOnly-cookie/same-origin desktop session behavior, owner+AAL2 authorization, Supabase RLS/RPC, optimistic revisions and card-vault boundaries remain unchanged.
+- No finance-data/schema migration, accounting rewrite or new runtime secret is introduced.
+
+### Validation
+
+- Fix PR #215 final head `a84120333e326648fff6d48775eecdafed9ba748` passed CI #839, CodeQL #793, Cross-engine/WebKit #126 and Performance #120 with zero unresolved review threads.
+- Windows First Run #10 passed a real NSIS install → persisted first-run configuration → Electron safeStorage/Windows DPAPI → live packaged backend → uninstall path without runtime Supabase/card-vault environment injection.
+- Windows Desktop #489 passed strengthened unpacked and installed launch checks that require the real packaged backend, plus NSIS install/launch/uninstall, checksum and evidence upload.
+- The integrated v1.2.1 release-prep tree is independently revalidated under release tracker #206 before production promotion; implementation-branch results are supporting evidence only.
+
+### Notes
+
+- v1.2.1 is a backward-compatible Windows reliability/security-diagnostics patch over v1.2.0. Web finance behavior, database state and Android bearer API semantics are unchanged.
+- Existing v1.2.0 desktop configuration can be reused; the patch does not require a new Supabase project or a card-vault-key rotation.
+- The Windows build may remain unsigned for personal use, so Windows can display Unknown publisher / Microsoft Defender SmartScreen; installer integrity remains protected by the controlled release source and published SHA-256 checksum.
+
 ## [1.2.0] - 2026-08-22
 
 ### Added
@@ -149,7 +178,8 @@ All notable MyFinHub changes are recorded here. Release artifacts remain availab
 
 - v1.0.0 is an unsigned personal-use Windows build. Windows may display Unknown publisher / Microsoft Defender SmartScreen.
 
-[Unreleased]: https://github.com/MariosGiannakaras/MyFinHub/compare/myfinhub-v1.2.0...develop
+[Unreleased]: https://github.com/MariosGiannakaras/MyFinHub/compare/myfinhub-v1.2.1...develop
+[1.2.1]: https://github.com/MariosGiannakaras/MyFinHub/releases/tag/myfinhub-v1.2.1
 [1.2.0]: https://github.com/MariosGiannakaras/MyFinHub/releases/tag/myfinhub-v1.2.0
 [1.1.0]: https://github.com/MariosGiannakaras/MyFinHub/releases/tag/myfinhub-v1.1.0
 [1.0.2]: https://github.com/MariosGiannakaras/MyFinHub/releases/tag/myfinhub-v1.0.2
