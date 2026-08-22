@@ -8,12 +8,36 @@ The Windows edition is a packaged desktop client, not a PWA and not a shortcut t
 - A bundled **Node.js 22.x** executable starts the existing Express backend as a hidden child process.
 - The local backend binds only to `127.0.0.1` on an operating-system-selected ephemeral port. It is started by the desktop host and stopped with the application.
 - The packaged Vite build is served from that local backend, preserving the same-origin HttpOnly-cookie boundary used by the existing local runtime.
-- The backend talks directly to the same Supabase project as the Vercel API through the publishable key, authenticated owner JWT and PostgreSQL RLS. Service-role/secret credentials are removed from the desktop runtime environment.
+- The backend talks directly to the canonical Supabase project through the application-owned public project URL + publishable key, authenticated owner JWT and PostgreSQL RLS.
+- Service-role/secret credentials are never embedded in the desktop package.
 - Owner identity and mandatory TOTP `aal2` remain required for finance reads/writes.
 
-The Vercel application remains the web/mobile client. Desktop and web are two clients of the same canonical Supabase state and optimistic revision model.
+The Vercel application remains the canonical production API/web client. Desktop and web are two clients of the same canonical Supabase state and optimistic revision model.
 
 Compatibility-critical legacy internal names such as `RHEOMIQ_DESKTOP_READY`, other `RHEOMIQ_*` local-backend environment variables and existing `rheomiq_*` database objects intentionally remain unchanged. They are protocol/persistence identifiers, not visible product branding.
+
+## No technical first-run setup
+
+A normal installed user is **not** asked for Supabase URLs, API keys, encryption keys or other infrastructure values.
+
+`SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` are public client configuration owned by the application and packaged with the controlled Windows release. They are not credentials and are not entered by the user.
+
+`CARD_VAULT_KEY` is a real server-side encryption secret and must **never** be packaged with the Windows client. Desktop PAN/expiry operations use the existing protected production `/api/card-secrets` boundary with the already authenticated owner `aal2` access token. The production server performs vault encryption/decryption, so the Windows application never needs or receives the vault key.
+
+CVV remains device-local only and never enters the server-side desktop or production card-vault boundary.
+
+## Startup recovery and diagnostics
+
+A healthy fresh installation starts the local backend and opens the normal MyFinHub login directly.
+
+If startup fails, MyFinHub opens a non-technical recovery window instead of asking for infrastructure configuration. The recovery surface provides:
+
+- a stable diagnostic code and startup stage;
+- bounded, sanitized backend detail;
+- retry without reinstalling;
+- copyable diagnostics for debugging.
+
+Local backend stdout/stderr diagnostics are bounded and redacted before display/copy. Supabase keys, bearer/JWT credentials and encryption-key-shaped values are removed from diagnostics.
 
 ## What synchronizes automatically
 
@@ -21,7 +45,7 @@ Compatibility-critical legacy internal names such as `RHEOMIQ_DESKTOP_READY`, ot
 
 Transactions, balances, cards, settings and the rest of the finance state use the shared Supabase database. A successful save from desktop or web writes the same canonical state. Optimistic revisions prevent a stale already-open client from silently overwriting a newer save.
 
-The React bundle, Electron host and local Express backend are intentionally local so ordinary desktop use does not depend on Vercel. UI/backend changes therefore arrive as a new Windows release, while finance data never needs Git fetches or reinstallations.
+The React bundle, Electron host and local Express backend are intentionally local so ordinary desktop UI/backend execution does not depend on Vercel. The exception is protected PAN/expiry card-vault operations, which intentionally traverse the canonical production API so the card-vault encryption key remains server-side.
 
 ## Normal installation
 
@@ -33,23 +57,7 @@ MyFinHub-Setup-<version>-x64.exe
 
 It installs per Windows user by default, creates **Desktop** and **Start Menu** shortcuts and launches MyFinHub when installation finishes. The executable is `MyFinHub.exe` and the desktop identity is `app.myfinhub.desktop`.
 
-On first launch, if local runtime configuration is missing, MyFinHub opens its own setup window instead of requiring a terminal. The setup UI shows steps, an animated progress/status surface and a live explanation of the background work: configuration validation, Windows-protected secret storage, local-backend startup and final application launch. UI motion respects `prefers-reduced-motion`.
-
-Required configuration:
-
-```text
-SUPABASE_URL
-SUPABASE_PUBLISHABLE_KEY
-```
-
-Optional card-secret support additionally uses the **existing** shared values:
-
-```text
-CARD_VAULT_KEY
-CARD_VAULT_KEY_VERSION
-```
-
-The card-vault key is encrypted through Electron `safeStorage` / Windows DPAPI for the current Windows account. It is never compiled into the package, sent to the renderer bundle or committed to Git. CVV remains the separate device-local encrypted vault and never enters the server-side desktop boundary.
+Normal users install once and then sign in with the same MyFinHub email/password + TOTP flow used by the web application. No terminal, Git, Node.js, browser or infrastructure setup is required.
 
 ## In-app updates
 
@@ -81,21 +89,23 @@ Integrity for both signed and unsigned updates is still enforced by the controll
 
 ## Release workflow
 
-`.github/workflows/desktop-windows.yml` validates the Windows package on a real `windows-latest` runner. PR validation includes:
+`.github/workflows/desktop-windows.yml` validates the Windows package on a real `windows-latest` runner. The intended patch-release gate includes:
 
 - deterministic root + desktop dependency installation;
 - security/test/build gates;
-- PowerShell fallback-bootstrap validation;
 - unpacked Windows package build;
-- real `MyFinHub.exe` process smoke with the hidden local backend;
+- real `MyFinHub.exe` hidden-backend smoke;
+- clean installed-user launch with application-owned public configuration and no runtime environment-variable provisioning bypass;
+- remote desktop card-vault boundary tests;
 - interactive NSIS Setup build;
+- install/launch/uninstall validation;
 - installer size/checksum validation;
-- short-retention installer/checksum artifacts as CI evidence.
+- short-retention installer/checksum evidence.
 
 A public desktop release is produced only from a tag such as:
 
 ```text
-myfinhub-v1.0.0
+myfinhub-v1.2.1
 ```
 
 The tagged commit must already be present on `main` and the tag version must match `desktop/package.json`. The release then publishes the installer plus its `.sha256` companion.
@@ -116,7 +126,7 @@ The fallback `--latest` mode remains available for recovery or machines where th
 INSTALL_MYFINHUB_WINDOWS.bat --latest
 ```
 
-Normal users should use `MyFinHub-Setup-*.exe` once and then the in-app updater. Git and Node are not required on the user machine for that path.
+Normal users should use `MyFinHub-Setup-*.exe` once and then the in-app updater.
 
 ## Development and generated files
 
@@ -135,7 +145,7 @@ desktop/.build/
 release/desktop/
 ```
 
-Canonical MyFinHub brand assets used by browser/PWA/desktop builds are also kept in the repository under:
+Canonical MyFinHub brand assets used by browser/PWA/desktop builds are kept under:
 
 ```text
 assets/branding/myfinhub/

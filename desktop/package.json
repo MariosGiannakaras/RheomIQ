@@ -4,13 +4,13 @@
   "private": true,
   "description": "MyFinHub Windows desktop host",
   "author": "MariosGiannakaras",
-  "main": "main.cjs",
+  "main": "bootstrap.cjs",
   "scripts": {
     "prepare:bundle": "node prepare-build.mjs",
     "dev": "node dev.mjs",
     "pack": "npm run prepare:bundle && electron-builder --win dir --x64",
     "dist": "npm run prepare:bundle && electron-builder --win nsis --x64 --publish never",
-    "check": "npm audit --audit-level=high && node --check main.cjs && node --check preload.cjs && node --check setup-renderer.js && node --check prepare-build.mjs && node --check dev.mjs"
+    "check": "npm audit --audit-level=high && node --check bootstrap.cjs && node --check main.cjs && node --check preload.cjs && node --check setup-renderer.js && node --check startup-diagnostics.cjs && node --check runtime-defaults.cjs && node --check prepare-build.mjs && node --check dev.mjs"
   },
   "dependencies": {
     "rheomiq": "file:.."
@@ -29,11 +29,14 @@
       "buildResources": "../public/brand"
     },
     "files": [
+      "bootstrap.cjs",
       "main.cjs",
       "preload.cjs",
       "setup.html",
       "setup-renderer.js",
       "setup-brand.png",
+      "startup-diagnostics.cjs",
+      "runtime-defaults.cjs",
       "package.json"
     ],
     "extraResources": [

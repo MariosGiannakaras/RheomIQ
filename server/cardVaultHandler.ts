@@ -2,6 +2,7 @@ import { accessTokenAal, assertMutationSessionOrigin, clearSessionCookiesIfCooki
 import { ApiError, handleApi, methodNotAllowed, readJsonBody, sendJson } from './http.js';
 import { isOwner } from './storage.js';
 import { deleteCardSecrets, readCardSecrets, writeCardSecrets } from './cardVaultStore.js';
+import { proxyDesktopCardVault } from './desktopCardVaultProxy.js';
 
 export const MAX_CARD_VAULT_BODY_BYTES=4*1024;
 const RATE_WINDOW_MS=60_000;
@@ -48,6 +49,15 @@ export async function handleCardVaultRequest(req:any,res:any){
     if(!ownerUserId)throw new ApiError(401,'AUTH_REQUIRED','Authentication required.');
     assertRate(ownerUserId);
     const body=parseCardVaultRequest(await readJsonBody(req,MAX_CARD_VAULT_BODY_BYTES),method as 'POST'|'PUT'|'DELETE');
+
+    // Windows never receives CARD_VAULT_KEY. Its loopback backend reuses the already-authenticated
+    // owner AAL2 access token against the canonical production API, where vault encryption remains
+    // server-side. Production/web/native bearer requests continue using the local store directly.
+    if(process.env.RHEOMIQ_DESKTOP==='1'){
+      const payload=await proxyDesktopCardVault(method as 'POST'|'PUT'|'DELETE',body,session.accessToken);
+      return sendJson(res,200,payload);
+    }
+
     if(method==='POST'){
       const secret=await readCardSecrets(ownerUserId,body.cardId,session.accessToken);
       if(!secret)throw new ApiError(404,'CARD_SECRET_NOT_FOUND','Δεν υπάρχουν αποθηκευμένα στοιχεία για αυτή την κάρτα.');

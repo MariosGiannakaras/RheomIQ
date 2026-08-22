@@ -1,0 +1,108 @@
+name: Windows Clean Launch
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - desktop/**
+      - server/**
+      - tests/desktop-*.test.ts
+      - package.json
+      - package-lock.json
+      - .github/workflows/desktop-clean-launch.yml
+  push:
+    branches: [develop]
+    paths:
+      - desktop/**
+      - server/**
+      - tests/desktop-*.test.ts
+      - package.json
+      - package-lock.json
+      - .github/workflows/desktop-clean-launch.yml
+
+concurrency:
+  group: desktop-clean-launch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clean-launch:
+    name: Clean installed-user launch without runtime provisioning
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          npm ci
+          npm ci --prefix desktop
+      - name: Validate source and tests
+        shell: pwsh
+        run: |
+          npm run check
+          npm run desktop:check
+      - name: Inject controlled public CI runtime defaults at build time
+        shell: pwsh
+        run: |
+          $path = 'desktop\runtime-defaults.cjs'
+          $content = Get-Content -LiteralPath $path -Raw
+          $content = $content.Replace('__MYFINHUB_SUPABASE_URL__', 'https://desktop-smoke.invalid')
+          $content = $content.Replace('__MYFINHUB_SUPABASE_PUBLISHABLE_KEY__', 'sb_publishable_desktop_smoke_only')
+          Set-Content -LiteralPath $path -Value $content -Encoding UTF8
+          if ((Get-Content -LiteralPath $path -Raw) -match '__MYFINHUB_SUPABASE_') { throw 'CI runtime-default placeholders were not replaced.' }
+      - name: Build interactive NSIS installer
+        shell: pwsh
+        run: npm run desktop:dist
+      - name: Fresh install and launch with no runtime provisioning
+        shell: pwsh
+        run: |
+          Remove-Item Env:SUPABASE_URL -ErrorAction SilentlyContinue
+          Remove-Item Env:SUPABASE_PUBLISHABLE_KEY -ErrorAction SilentlyContinue
+          Remove-Item Env:CARD_VAULT_KEY -ErrorAction SilentlyContinue
+          Remove-Item Env:CARD_VAULT_KEY_VERSION -ErrorAction SilentlyContinue
+
+          $appDataCandidates = @(
+            (Join-Path $env:APPDATA 'MyFinHub'),
+            (Join-Path $env:APPDATA 'RheomIQ')
+          )
+          foreach ($candidate in $appDataCandidates) { Remove-Item -LiteralPath $candidate -Recurse -Force -ErrorAction SilentlyContinue }
+
+          $installer = Get-ChildItem release\desktop\MyFinHub-Setup-*-x64.exe | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          if (-not $installer) { throw 'Windows installer artifact is missing.' }
+          $install = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Silent install failed with exit code $($install.ExitCode)." }
+          Start-Sleep -Seconds 2
+          Get-Process MyFinHub -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+          $shortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'MyFinHub.lnk'
+          if (-not (Test-Path -LiteralPath $shortcut)) { throw 'Installed desktop shortcut is missing.' }
+          $shell = New-Object -ComObject WScript.Shell
+          $exe = $shell.CreateShortcut($shortcut).TargetPath
+          if (-not (Test-Path -LiteralPath $exe)) { throw 'Installed MyFinHub executable is missing.' }
+
+          $process = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 10
+          $process.Refresh()
+          if ($process.HasExited) { throw "Clean installed MyFinHub exited during startup with code $($process.ExitCode)." }
+
+          foreach ($candidate in $appDataCandidates) {
+            if (Test-Path -LiteralPath (Join-Path $candidate 'runtime-config.json')) { throw 'Clean launch unexpectedly created runtime-config.json.' }
+            if (Test-Path -LiteralPath (Join-Path $candidate 'runtime-secrets.json')) { throw 'Clean launch unexpectedly created runtime-secrets.json.' }
+            if (Test-Path -LiteralPath (Join-Path $candidate 'pending-provision.json')) { throw 'Clean launch unexpectedly created pending-provision.json.' }
+          }
+
+          Get-Process MyFinHub -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          $installDir = Split-Path -Parent $exe
+          $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter 'Uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $uninstaller) { throw 'Installed MyFinHub uninstaller is missing.' }
+          $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Silent uninstall failed with exit code $($uninstall.ExitCode)." }

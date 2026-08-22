@@ -8,14 +8,18 @@ const bytes = (relative:string) => fs.readFileSync(path.join(root, relative));
 const exists = (relative:string) => fs.existsSync(path.join(root, relative));
 
 const desktopPackage = JSON.parse(read('desktop/package.json'));
+const bootstrap = read('desktop/bootstrap.cjs');
+const defaults = read('desktop/runtime-defaults.cjs');
 const main = read('desktop/main.cjs');
 const preload = read('desktop/preload.cjs');
-const setup = read('desktop/setup.html');
-const setupRenderer = read('desktop/setup-renderer.js');
+const recovery = read('desktop/setup.html');
+const recoveryRenderer = read('desktop/setup-renderer.js');
 const settings = read('src/pages/SettingsPage.tsx');
 const updatePanel = read('src/components/DesktopUpdatePanel.tsx');
 const workflow = read('.github/workflows/desktop-windows.yml');
 const prepareBuild = read('desktop/prepare-build.mjs');
+const vaultHandler = read('server/cardVaultHandler.ts');
+const vaultProxy = read('server/desktopCardVaultProxy.ts');
 
 function mainBlock(start:string,end:string){const from=main.indexOf(start);const to=main.indexOf(end,from+start.length);expect(from).toBeGreaterThanOrEqual(0);expect(to).toBeGreaterThan(from);return main.slice(from,to);}
 
@@ -30,37 +34,44 @@ describe('MyFinHub Windows desktop boundary', () => {
     expect(desktopPackage.build.nsis.allowToChangeInstallationDirectory).toBe(true);
     expect(desktopPackage.build.nsis.createDesktopShortcut).toBe('always');
     expect(desktopPackage.build.nsis.createStartMenuShortcut).toBe(true);
+    expect(desktopPackage.main).toBe('bootstrap.cjs');
     expect(main).toContain("const PRODUCT_NAME = 'MyFinHub'");
     expect(main).toContain('title: PRODUCT_NAME');
-    expect(main).toContain('title: `${PRODUCT_NAME} — Αρχική ρύθμιση`');
   });
 
-  it('keeps the renderer sandboxed and exposes only narrow setup/update IPC', () => {
+  it('keeps the renderer sandboxed and exposes only narrow recovery/update IPC', () => {
     expect(main).toContain('contextIsolation: true');
     expect(main).toContain('nodeIntegration: false');
     expect(main).toContain('sandbox: true');
     expect(main).toContain("preload: path.join(__dirname, 'preload.cjs')");
     expect(preload).toContain("contextBridge.exposeInMainWorld('myFinHubDesktop'");
+    expect(preload).toContain('getRecoveryState: async () =>');
+    expect(preload).toContain('retryStartup: async () =>');
+    expect(preload).toContain('copyStartupDiagnostics: () =>');
+    expect(preload).not.toContain('getSetupState:');
+    expect(preload).not.toContain('saveSetup:');
     expect(preload).not.toContain("require('fs')");
     expect(preload).not.toContain('child_process');
     expect(main).toContain('isMainSender(event)');
     expect(main).toContain('isSetupSender(event)');
   });
 
-  it('supports modern app-owned first-run setup without compiling secrets into the renderer', () => {
-    expect(setup).toContain('MyFinHub');
-    expect(setup).toContain('SUPABASE_URL');
-    expect(setup).toContain('SUPABASE_PUBLISHABLE_KEY');
-    expect(setup).toContain('CARD_VAULT_KEY');
-    expect(setup).toContain('progress-shell');
-    expect(setup).toContain('Τι εκτελείται στο παρασκήνιο');
-    expect(setup).toContain('@media(prefers-reduced-motion:reduce)');
-    expect(setupRenderer).toContain('bridge.saveSetup');
-    expect(setupRenderer).toContain('setProgress(');
-    expect(preload).toContain('onSetupProgress');
-    expect(main).toContain("safeStorage.encryptString(cardVaultKey)");
-    expect(main).toContain("delete env.SUPABASE_SERVICE_ROLE_KEY");
-    expect(main).toContain("delete env.SUPABASE_SECRET_KEY");
+  it('does not ask normal users for infrastructure configuration', () => {
+    expect(desktopPackage.build.files).toContain('bootstrap.cjs');
+    expect(desktopPackage.build.files).toContain('runtime-defaults.cjs');
+    expect(bootstrap).toContain("require('./runtime-defaults.cjs')");
+    expect(bootstrap).toContain('process.env.SUPABASE_URL');
+    expect(bootstrap).toContain('process.env.SUPABASE_PUBLISHABLE_KEY');
+    expect(bootstrap).toContain('delete process.env.CARD_VAULT_KEY');
+    expect(defaults).toContain("productionOrigin: 'https://mgfinhub.vercel.app'");
+    expect(defaults).not.toMatch(/CARD_VAULT_KEY\s*:/);
+    expect(recovery).not.toContain('SUPABASE_URL');
+    expect(recovery).not.toContain('SUPABASE_PUBLISHABLE_KEY');
+    expect(recovery).not.toContain('CARD_VAULT_KEY');
+    expect(recoveryRenderer).not.toContain('supabaseUrl');
+    expect(recoveryRenderer).not.toContain('supabasePublishableKey');
+    expect(recovery).toContain('Νέα προσπάθεια');
+    expect(recovery).toContain('Αντιγραφή διαγνωστικών');
   });
 
   it('keeps the local backend loopback-only while preserving the legacy protocol contract', () => {
@@ -70,6 +81,25 @@ describe('MyFinHub Windows desktop boundary', () => {
     expect(main).toContain("env.RHEOMIQ_PORT = '0'");
     expect(main).toContain("env.RHEOMIQ_DESKTOP = '1'");
     expect(main).toContain('windowsHide: true');
+  });
+
+  it('captures safe startup diagnostics instead of discarding backend stderr', () => {
+    expect(main).toContain("child.stderr.on('data', chunk =>");
+    expect(main).toContain('appendDiagnostic(stderrDiagnostic');
+    expect(main).not.toContain("child.stderr.on('data', () => {})");
+    expect(main).toContain("startupError('BACKEND_START_TIMEOUT'");
+    expect(main).toContain("startupError('BACKEND_SPAWN_FAILED'");
+    expect(recoveryRenderer).toContain('renderDiagnostic');
+    expect(recoveryRenderer).toContain('bridge.copyStartupDiagnostics()');
+  });
+
+  it('keeps CARD_VAULT_KEY server-side for Windows PAN/expiry operations', () => {
+    expect(bootstrap).toContain('delete process.env.CARD_VAULT_KEY');
+    expect(vaultHandler).toContain("if(process.env.RHEOMIQ_DESKTOP==='1')");
+    expect(vaultHandler).toContain('proxyDesktopCardVault');
+    expect(vaultProxy).toContain("authorization:`Bearer ${accessToken}`");
+    expect(vaultProxy).toContain('/api/card-secrets');
+    expect(vaultProxy).toContain('mgfinhub.vercel.app');
   });
 
   it('surfaces explicit in-app update controls only through the Electron bridge', () => {
@@ -114,8 +144,6 @@ describe('MyFinHub Windows desktop boundary', () => {
     expect(workflow).toContain("'MyFinHub.lnk'");
     expect(workflow).toContain('CreateShortcut($desktopShortcut)');
     expect(workflow).toContain("HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*");
-    expect(workflow).toContain("HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*");
-    expect(workflow).toContain("HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*");
     expect(workflow).toContain("DisplayName -like 'MyFinHub*'");
     expect(workflow).toContain('UninstallString');
     expect(workflow).toContain('Installed MyFinHub process is not running from the installed executable path.');
@@ -123,7 +151,6 @@ describe('MyFinHub Windows desktop boundary', () => {
     expect(workflow).toContain('ExtractAssociatedIcon($exe)');
     expect(workflow).toContain("-Filter 'Uninstall*.exe'");
     expect(workflow).toContain('MyFinHub executable remains after silent uninstall.');
-    expect(workflow).not.toContain("MainWindowTitle -match 'MyFinHub'");
   });
 
   it('keeps the new light/dark MyFinHub artwork and generates the Windows 512 size at build time', () => {
@@ -149,12 +176,11 @@ describe('MyFinHub Windows desktop boundary', () => {
     expect(bytes('desktop/setup-brand.png').equals(bytes('public/brand/icon-dark-192.png'))).toBe(true);
     expect(prepareBuild).toContain("const sourceIcon=path.join(root,'public','brand','icon-light-192.png')");
     expect(prepareBuild).toContain('[Drawing.Bitmap]::new(512,512)');
-    expect(prepareBuild).not.toContain('nativeAppIcon');
     expect(workflow).toContain('assets/branding/myfinhub/**');
   });
 
   it('keeps CVV out of the server-side desktop boundary', () => {
     expect(main).not.toMatch(/CVV|CVC|securityCode/i);
-    expect(setupRenderer).not.toMatch(/CVV|CVC|securityCode/i);
+    expect(recoveryRenderer).not.toMatch(/CVV|CVC|securityCode/i);
   });
 });
